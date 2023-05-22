@@ -5,7 +5,7 @@ using UnityEditor.Search;
 using UnityEngine;
 
 [RequireComponent(typeof(Rigidbody2D))]
-public class ControllerAI2D : MonoBehaviour
+public class ControllerAI2D : MonoBehaviour, IDamagable
 {
 	[SerializeField] Animator animator;
 	[SerializeField] SpriteRenderer spriteRenderer;
@@ -22,12 +22,16 @@ public class ControllerAI2D : MonoBehaviour
 	[Header("AI")]
 	[SerializeField] Transform[] waypoints;
 	[SerializeField] float rayDistance = 1;
+	[SerializeField] string enemyTag;
+	[SerializeField] LayerMask raycastLayerMask;
+
+	public float health = 100;
 
 	Rigidbody2D rb;
 	Vector2 velocity = Vector2.zero;
 	bool faceRight = true;
-	float groundAngle = 0;
 	Transform targetWaypoint = null;
+	GameObject enemy = null;
 
 	enum State
 	{
@@ -38,7 +42,7 @@ public class ControllerAI2D : MonoBehaviour
 	}
 
 	State state = State.IDLE;
-	float stateTimer = 0;
+	float stateTimer = 1;
 
 	void Start()
 	{
@@ -47,20 +51,22 @@ public class ControllerAI2D : MonoBehaviour
 
 	void Update()
 	{
-		Vector2 direction = Vector2.zero;
+		CheckEnemySeen();
 
+		Vector2 direction = Vector2.zero;
 		//update ai
 		switch (state)
 		{
 			
 			case State.IDLE:
-				if (CanSeePlayer())
+				
+				if (enemy != null)
 				{
 					state = State.CHASE;
 				}
 
-				stateTimer += Time.deltaTime;
-				if (stateTimer >= 0.5f)
+				stateTimer -= Time.deltaTime;
+				if (stateTimer <= 0)
 				{
 					SetNewWaypointTarget();
 					state = State.PATROL;
@@ -68,30 +74,55 @@ public class ControllerAI2D : MonoBehaviour
 				break;
 
 			case State.PATROL:
-				if (CanSeePlayer())
 				{
-					state = State.CHASE;
+					// if enemy is seen changes to chase state
+					if (enemy != null)
+					{
+						state = State.CHASE;
+					}
+
+					direction.x = Mathf.Sign(targetWaypoint.position.x - transform.position.x);
+
+					float dx = Mathf.Abs(targetWaypoint.position.x - transform.position.x);
+
+					if (dx <= 0.25f)
+					{
+						state = State.IDLE;
+						stateTimer = 1;
+					}
+
 				}
-
-				speed = 2;
-				direction.x = Mathf.Sign(targetWaypoint.position.x - transform.position.x);
-				
-				float dx = Mathf.Abs(targetWaypoint.position.x - transform.position.x);
-
-				if (dx <= 0.25f)
-				{
-					state = State.IDLE;
-					stateTimer = 0;
-					//direction.x = 0;
-				}
-
 				break;
 			
 			case State.CHASE:
-
+				{
+					// checks to see if the enemy has been seen
+					if (enemy == null)
+					{
+						state = State.IDLE;
+						stateTimer = 1;
+						break;
+					}
+					// checks distance to enemy if seen
+					float dx = Mathf.Abs(enemy.transform.position.x - transform.position.x);
+					if (dx <= 1f)
+					{
+						state = State.ATTACK;
+						animator.SetTrigger("Attack");
+					}
+					else
+					{
+						direction.x = Mathf.Sign(enemy.transform.position.x - transform.position.x);
+					}
+				}
 				break;
-
+				
 			case State.ATTACK:
+				// goes to chase state if attack animation is done
+				if (animator.GetCurrentAnimatorStateInfo(0).normalizedTime > 1 && !animator.IsInTransition(0))
+				{
+					state = State.CHASE;
+				}
 				break;
 			
 			default:
@@ -99,21 +130,15 @@ public class ControllerAI2D : MonoBehaviour
 		}
 
 		// check if the character is on the ground
-		bool onGround = Physics2D.OverlapCircle(groundTransform.position, 0.2f, groundLayerMask) != null;
-		//bool onGround = UpdateGroundCheck();
-		
+		bool onGround = Physics2D.OverlapCircle(groundTransform.position, groundRadius, groundLayerMask) != null;
+
 		velocity.x = direction.x * speed;
 
 		// set velocity
 		if (onGround)
 		{
 			if (velocity.y < 0) velocity.y = 0;
-			if (Input.GetButtonDown("Jump"))
-			{
-				velocity.y += Mathf.Sqrt(jumpHeight * -2 * Physics.gravity.y);
-				StartCoroutine(DoubleJump());
-				animator.SetTrigger("Jump");
-			}
+			
 		}
 		velocity.y += Physics.gravity.y * Time.deltaTime;
 
@@ -175,11 +200,27 @@ public class ControllerAI2D : MonoBehaviour
 		targetWaypoint = waypoint;
 	}
 
-	private bool CanSeePlayer()
+	private void CheckEnemySeen()
 	{
-		RaycastHit2D raycastHit = Physics2D.Raycast(transform.position, ((faceRight) ? Vector2.right : Vector2.left) * rayDistance);
-		Debug.DrawRay(transform.position, ((faceRight) ? Vector2.right : Vector2.left) * rayDistance);
+		enemy = null;
+		RaycastHit2D raycastHit = Physics2D.Raycast(transform.position, ((faceRight) ? Vector2.right : Vector2.left), rayDistance, raycastLayerMask);
+		if (raycastHit.collider != null && raycastHit.collider.gameObject.CompareTag(enemyTag))
+		{
+			enemy = raycastHit.collider.gameObject;
+			Debug.DrawRay(transform.position, ((faceRight) ? Vector2.right : Vector2.left) * rayDistance, Color.red);
+		}
+	}
 
-		return raycastHit.collider != null && raycastHit.collider.gameObject.CompareTag("Player");
+	public void Damage(int damage)
+	{
+		health -= damage;
+		// print is short for Debug.Log
+		print(health);
+
+		if(health <= 0)
+		{
+			animator.SetBool("Death", true);
+			Destroy(gameObject, 1);
+		}
 	}
 }
